@@ -154,3 +154,6 @@ dmypy.json
 GYMNASIUM_PLAN.md
 LANDSCAPE.md
 refactor.md
+
+# Runtime simulation logs and plots
+/logs/

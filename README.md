@@ -1,127 +1,84 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/vkotaru/udaan/main/.media/logo.png" width="360" alt="udaan — aerial robotics framework"/>
-</p>
+# Udaan CrazySwarm 三机吊运仿真
 
-<p align="center">
-  <strong>A Python MuJoCo-based models and controllers for quadcopter cable-suspended payload systems.</strong>
-</p>
+本项目在 Udaan 中实现了基于 MuJoCo 的三架 Crazyflie 协同吊运仿真。仿真从载荷和无人机位于地面开始，经过独立起飞、收绳、张力建立、协同抬升和悬停，最后完成载荷与无人机降落。控制器结构和物理参数参考 CrazySwarm MATLAB 吊运程序，并针对 MuJoCo 仿真进行调试。
 
-<p align="center">
-  <a href="https://github.com/vkotaru/udaan/actions"><img src="https://img.shields.io/github/actions/workflow/status/vkotaru/udaan/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI" alt="CI"></a>
-  <a href="https://github.com/vkotaru/udaan/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-BSD--3--Clause-blue?style=flat-square" alt="License"></a>
-  <a href="https://pypi.org/project/udaan/"><img src="https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"></a>
-  <a href="https://mujoco.org"><img src="https://img.shields.io/badge/MuJoCo-3.0%2B-76B900?style=flat-square" alt="MuJoCo"></a>
-</p>
+## 安装
 
----
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/vkotaru/udaan/main/.media/quadrotor.gif" width="250" alt="Quadrotor"/>
-  <img src="https://raw.githubusercontent.com/vkotaru/udaan/main/.media/quad_payload_tendon.gif" width="250" alt="Quad + Payload (tendon)"/>
-  <img src="https://raw.githubusercontent.com/vkotaru/udaan/main/.media/quad_payload_links.gif" width="250" alt="Quad + Payload (links)"/>
-</p>
-<p align="center">
-  <img src="https://raw.githubusercontent.com/vkotaru/udaan/main/.media/multi_quad_pointmass.gif" width="250" alt="Multi-Quad Pointmass"/>
-  <img src="https://raw.githubusercontent.com/vkotaru/udaan/main/.media/multi_quad_rigid.gif" width="250" alt="Multi-Quad Rigidbody"/>
-  <img src="https://raw.githubusercontent.com/vkotaru/udaan/main/.media/fleet_l1.gif" width="250" alt="Fleet L1 Comparison"/>
-</p>
-
----
-
-> Developed as part of the thesis: _Dynamics and Control for Collaborative Aerial Manipulation_ ([Kotaru, 2022](https://github.com/vkotaru)).
-> Original research code: [vkotaru/floating_models](https://github.com/vkotaru/floating_models). This package is the cleaned-up public release, refactored with [Claude](https://claude.ai).
-
-&#x1F681; Quadrotor dynamics &nbsp;&bull;&nbsp; &#x1F39B; Geometric control on SE(3)/SO(3) &nbsp;&bull;&nbsp; &#x26D3; Cable-suspended payloads &nbsp;&bull;&nbsp; &#x1F91D; Multi-quad cooperative transport &nbsp;&bull;&nbsp; &#x1F579; MuJoCo simulation &nbsp;&bull;&nbsp; &#x1F5A5; CLI interface
-
-## Installation
+在项目根目录安装：
 
 ```bash
-pip install udaan
+python -m pip install -e .
 ```
 
-MuJoCo is included as a core dependency. Install all extras (dev, docs, RL):
+## 运行
 
 ```bash
-pip install udaan[all]
+# 打开 MuJoCo 窗口，执行完整流程并自动保存带时间戳的 CSV 到 logs/
+udaan run crazyswarm-slung
+
+# 无窗口运行，指定 CSV 文件
+udaan run crazyswarm-slung --no-render --csv logs/hover-test.csv
+
+# 限制仿真时长；省略 --time 会运行完整流程
+udaan run crazyswarm-slung --time 61.2 --no-render --csv logs/short-run.csv
+
+# 同时录制仿真画面和控制数据
+udaan run crazyswarm-slung --record logs/run.mp4 --csv logs/run.csv
+
+# 关闭 CSV 记录
+udaan run crazyswarm-slung --no-csv
 ```
 
-For development:
+完整流程阶段为：`GROUND_SLACK`、`INDEPENDENT_TAKEOFF`、`TAKEUP`、`TENSION_RAMP`、`REFERENCE_LIFT`、`HOVER`、`LANDING_TAUT`、`LANDING_RELEASE`、`LANDED`。默认在 1 m 高度悬停 30 秒。
+
+MuJoCo 窗口支持鼠标旋转、平移和滚轮缩放；按 `1` 恢复斜视，按 `2`、`3`、`4` 切换侧视或俯视，按 `F` 切换跟随载荷和自由观察，按 `Esc` 或 `Q` 关闭窗口。
+
+## 绘制 CSV
+
+绘图脚本可显示载荷位置误差与姿态、无人机轨迹、吊绳方向误差、张力、高度和推力。省略 CSV 路径时会读取 `logs/` 中最新的吊运记录。
 
 ```bash
-git clone https://github.com/vkotaru/udaan.git
-cd udaan
-pip install -e ".[all]"
+# 绘制最新日志
+python scripts/plot_crazyswarm_slung_csv.py
+
+# 只绘制 HOVER 阶段并保存图片
+python scripts/plot_crazyswarm_slung_csv.py logs/hover-test.csv \
+  --phase HOVER --save logs/hover-test.png
+
+# 保存图片但不打开绘图窗口
+python scripts/plot_crazyswarm_slung_csv.py logs/hover-test.csv \
+  --phase HOVER --save logs/hover-test.png --no-show
 ```
 
-## Quick Start
+仿真 CSV 每个控制步为 CF3、CF4、CF5 各记录一行，包含飞行阶段、位置和姿态、目标与误差、控制指令、实际推力、吊绳状态和张力，以及本次运行使用的控制参数。
 
-### CLI
+## 代码结构
+
+- `udaan/crazyswarm_slung_parameters.py`：无人机、载荷、吊绳和控制器参数。
+- `udaan/control/crazyswarm_slung.py`：独立起飞控制和协同吊运控制器。
+- `udaan/models/mujoco/crazyswarm_slung.py`：MuJoCo 仿真、阶段状态机和数据采样。
+- `udaan/models/mujoco/crazyswarm_slung_scene.py`：MJCF 场景生成。
+- `udaan/models/mujoco/crazyswarm_slung_logging.py`：CSV 字段、记录器和姿态角转换。
+- `scripts/plot_crazyswarm_slung_csv.py`：CSV 数据绘图。
+
+## 当前仿真参数
+
+- Crazyflie 机体外形：`50 x 50 x 14 mm`；臂长：`46.5 mm`。
+- 螺旋桨保护罩视觉外径：`52 mm`。这是根据桨径估算的显示几何，不参与碰撞或质量计算。
+- 载荷：质量 `54 g`，尺寸 `80 x 60 x 50 mm`。
+- 三根吊绳长度：`0.694 m`、`0.692 m`、`0.631 m`。
+- 仿真时间步长：`0.002 s`（500 Hz）；推力一阶时间常数：`0.012 s`。
+- 载荷姿态带宽：roll/pitch/yaw 为 `6.0/6.0/0.30 Hz`。其中 yaw 当前仿真调试值为 `0.30 Hz`；MATLAB 参考配置为 `0.45 Hz`。
+- `transport_link_gain_scale=0.01` 是当前 MuJoCo 仿真的绳向反馈调试比例，不是 Crazyflie 实机参数。
+
+参数集中在 `udaan/crazyswarm_slung_parameters.py`，每次运行的实际参数也会写入 CSV，便于后续对照调参。
+
+## 测试
 
 ```bash
-# Quadrotor with geometric SE(3) control
-udaan run quadrotor                                    # MuJoCo (default)
-udaan run quadrotor -m base                            # pure dynamics (no viz)
-udaan run quadrotor -m vfx                             # VPython visualization
-
-# Trajectory tracking
-udaan run quadrotor --traj hover -p 1,1,0              # hover (default)
-udaan run quadrotor --traj spiral -p 0,0,2             # helical spiral
-udaan run quadrotor --traj lissajous -p 0,0,2          # 3D Lissajous
-udaan run quadrotor --traj circle -p 0,0,1             # circular
-
-# Cable-suspended payload
-udaan run quad-payload -t 10 -c tendon                 # spatial tendon cable
-udaan run quad-payload -t 10 -c links                  # rigid link chain
-udaan run quad-payload -t 10 -c cable                  # composite cable (experimental)
-udaan run quad-payload -t 10 -m vfx                   # vpython backend
-
-# Multi-quadrotor cooperative transport
-udaan run multi-quad -n 3 -t 10                        # N-quad pointmass payload
-udaan run multi-quad-rigid -t 10                       # rigid-body payload
-
-# CrazySwarm three-vehicle rigid-load simulation
-udaan run crazyswarm-slung --no-render                 # full ground-to-ground run
-udaan run crazyswarm-slung -t 20 -r lift.gif             # bounded run with recording
-udaan run crazyswarm-slung --csv logs/tune.csv --no-render # save per-step controller diagnostics
-python scripts/plot_crazyswarm_slung_csv.py logs/tune.csv --phase HOVER --save hover.png # plot CSV diagnostics
-# simulation tuning: transport_link_gain_scale=0.01 (CrazySwarm baseline: 0.0)
-# visual propeller-guard envelope: 52 mm outer diameter (estimated from 46 mm propeller)
-# TENSION_RAMP position hold gain scale: 2.0
-
-# Fleet: compare controllers side-by-side
-udaan run fleet --demo l1-comparison                   # L1 adaptive vs PD
-udaan run fleet --demo gain-sweep                      # PD gain comparison
-udaan run fleet -n 4 --trail                           # 4 quads with trails
-
-# Cable-payload fleet: compare payload controllers / gains side-by-side
-udaan run cspayload-fleet --demo same-gains            # 2 agents, default gains
-udaan run cspayload-fleet --demo gain-sweep            # cable kp/kd × [0.5, 1, 1.5, 2]
-udaan run cspayload-fleet --demo gain-sweep --same-start  # overlap start, gain-driven divergence
-udaan run cspayload-fleet -n 4                         # 4 agents, default gains
-
-# Recording
-udaan run quadrotor -t 5 -r out.gif                    # save to GIF
-udaan run quadrotor --traj spiral -r spiral.mp4        # save to MP4
+python -m unittest tests.test_crazyswarm_slung -v
 ```
 
-### Python
+## 许可证
 
-```python
-from udaan.models.quadrotor import QuadrotorBase, QuadrotorMujoco
-
-# Pure dynamics (no rendering)
-mdl = QuadrotorBase()
-mdl.simulate(tf=10, position=[1., 1., 0.])
-
-# MuJoCo with visualization
-mdl = QuadrotorMujoco(render=True)
-mdl.simulate(tf=10, position=[1., 1., 0.])
-```
-
-## Documentation
-
-Full API reference, controller roadmap, and tutorials coming soon at [udaan.readthedocs.io](https://udaan.readthedocs.io).
-
-## License
-
-BSD 3-Clause License. See [LICENSE](https://github.com/vkotaru/udaan/blob/main/LICENSE) for details.
+许可证信息见 [`LICENSE`](LICENSE)。
