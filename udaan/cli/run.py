@@ -201,6 +201,59 @@ def multi_quad_rigid(
     _hold_viewer(mdl)
 
 
+@run_app.command("crazyswarm-slung")
+def crazyswarm_slung(
+    time: float | None = typer.Option(
+        None, "--time", "-t", min=0.0,
+        help="仿真时间上限；省略时运行完整起飞、悬停和着陆流程。",
+    ),
+    render: bool = typer.Option(True, "--render/--no-render", help="启用 MuJoCo 可视化。"),
+    record: str | None = _record_option,
+    csv_path: str | None = typer.Option(
+        None, "--csv", help="CSV 输出路径；默认写入 logs/ 下的带时间戳文件。"
+    ),
+    no_csv: bool = typer.Option(False, "--no-csv", help="关闭逐步 CSV 记录。"),
+):
+    """运行 CrazySwarm 三架无人机协同吊运仿真。"""
+    from datetime import datetime
+    from pathlib import Path
+
+    from udaan.models.mujoco import CrazySwarmSlungModel
+
+    if no_csv and csv_path is not None:
+        raise typer.BadParameter("--csv 与 --no-csv 不能同时使用")
+    output_csv = None
+    if not no_csv:
+        output_csv = (
+            Path(csv_path).expanduser()
+            if csv_path is not None
+            else Path("logs")
+            / f"crazyswarm_slung_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.csv"
+        )
+
+    mdl = CrazySwarmSlungModel(render=render, record=record, csv_path=output_csv)
+    try:
+        typer.echo("运行 CrazySwarm 三机吊运仿真……")
+        if output_csv is not None:
+            typer.echo(f"CSV：{output_csv}")
+        summary = mdl.simulate(tf=time)
+        typer.echo(
+            f"阶段：{summary['phase']}，仿真时间：{summary['time']:.2f} s，"
+            f"载荷最高高度：{summary['max_payload_height']:.3f} m"
+        )
+        typer.echo(
+            "接地状态：载荷={}，三架无人机={}".format(
+                "是" if summary["payload_ground_contact"] else "否",
+                "是" if summary["all_vehicles_ground_contact"] else "否",
+            )
+        )
+        _hold_viewer(mdl)
+        if time is None and summary["phase"] != "LANDED":
+            raise typer.Exit(1)
+    finally:
+        mdl.close()
+
+
 @run_app.command("cspayload-fleet")
 def cspayload_fleet(
     time: float = typer.Option(8.0, "--time", "-t", help="Simulation duration in seconds."),

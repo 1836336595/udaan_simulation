@@ -79,6 +79,15 @@ udaan run quad-payload -t 10 -m vfx                   # vpython backend
 udaan run multi-quad -n 3 -t 10                        # N-quad pointmass payload
 udaan run multi-quad-rigid -t 10                       # rigid-body payload
 
+# CrazySwarm three-vehicle rigid-load simulation
+udaan run crazyswarm-slung --no-render                 # full ground-to-ground run
+udaan run crazyswarm-slung -t 20 -r lift.gif             # bounded run with recording
+udaan run crazyswarm-slung --csv logs/tune.csv --no-render # save per-step controller diagnostics
+python scripts/plot_crazyswarm_slung_csv.py logs/tune.csv --phase HOVER --save hover.png # plot CSV diagnostics
+# simulation tuning: transport_link_gain_scale=0.01 (CrazySwarm baseline: 0.0)
+# visual propeller-guard envelope: 52 mm outer diameter (estimated from 46 mm propeller)
+# TENSION_RAMP position hold gain scale: 2.0
+
 # Fleet: compare controllers side-by-side
 udaan run fleet --demo l1-comparison                   # L1 adaptive vs PD
 udaan run fleet --demo gain-sweep                      # PD gain comparison

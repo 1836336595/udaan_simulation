@@ -1,70 +1,74 @@
-# CrazySwarm Three-UAV Sling-Load Simulation Design
+# CrazySwarm 三架无人机吊运仿真设计
 
-## Goal
+## 目标
 
-Add a Udaan/MuJoCo scenario that starts with three Crazyflies and a rectangular payload on the ground, independently lifts the aircraft, takes up three cables, transfers to cooperative payload control, holds a hover, then lowers the load and lands the aircraft.
+在 Udaan/MuJoCo 中新增一个仿真场景：三架 Crazyflie 和一个长方体载荷从地面开始；无人机分别起飞并收紧三根吊绳，随后切换到协同载荷控制、保持悬停，再降低载荷并让无人机着陆。
 
-## Current Context
+## 现状
 
-Udaan's existing `MultiQuadrotorCSPointmass` model uses a shared point-mass payload and generic quadrotor defaults. It does not represent the CrazySwarm payload geometry, per-aircraft cable lengths, or the ground/slack/handoff/landing sequence.
+Udaan 现有的 `MultiQuadrotorCSPointmass` 模型使用共用的点质量载荷和通用四旋翼默认参数，没有表示 CrazySwarm 的载荷几何、各无人机不同的绳长，也没有地面、松绳、控制交接和着陆阶段。
 
-CrazySwarm already contains a MATLAB rigid-payload simulator with independent takeoff, cable take-up, tension ramp, cooperative transport, and release/landing stages. Its default physical values differ from the current hardware configuration, so this design uses the live CrazySwarm YAML for hardware-specific values and the MATLAB project for missing geometry and control equations.
+CrazySwarm 已有一个 MATLAB 刚性载荷仿真，包含无人机分别起飞、收绳、张力渐增、协同运输以及释放和着陆阶段。其默认物理参数与当前硬件配置不同，因此本设计使用 CrazySwarm 当前 YAML 中的硬件参数，并使用 MATLAB 项目补足缺失的几何尺寸和控制方程。
 
-## Scope
+## 范围
 
-- Add a dedicated Udaan CLI command: `udaan run crazyswarm-slung`.
-- Simulate exactly three Crazyflie vehicles and one rigid rectangular payload in a MuJoCo scene with a floor and three individually sized, tension-only cables.
-- Preserve the existing Udaan commands and models.
-- Keep the CrazySwarm repository read-only; Udaan owns the port and its standalone defaults.
-- Exclude lateral transport trajectories, mocap/ROS integration, radio/firmware emulation, and payload obstacles.
+- 新增专用 Udaan 命令：`udaan run crazyswarm-slung`。
+- 在包含地面的 MuJoCo 场景中，仿真三架 Crazyflie、一件刚性长方体载荷，以及三根长度分别配置、只能受拉的吊绳。
+- 保留现有 Udaan 命令和模型。
+- CrazySwarm 仓库保持只读；移植代码和独立默认参数归 Udaan 管理。
+- 本设计不包含水平运输轨迹、mocap/ROS 集成、无线电/固件仿真或载荷障碍物。
 
-## Parameters
+## 参数
 
-The command's default configuration mirrors the current CrazySwarm branch:
+命令默认物理配置与 CrazySwarm 当前分支一致；绳方向反馈比例使用基于最新仿真 CSV 对照结果的调参值 0.01：
 
-| Parameter | Value/source |
+| 参数 | 数值/来源 |
 | --- | --- |
-| Vehicles | 3, ordered CF3, CF4, CF5 |
-| Vehicle mass | 0.0434, 0.0463, 0.0422 kg from `config/ctbr_vehicle.yaml` |
-| Vehicle command thrust cap | 1.00 N per vehicle; calibrated total capability 1.176798 N |
-| Body-rate limit | [3, 3, 2] rad/s; maximum tilt 10 degrees |
-| Vehicle display geometry | 0.050 x 0.050 x 0.014 m body, 0.0465 m arm, 0.023 m rotor radius from MATLAB parameters |
-| Payload | 0.054 kg, 0.080 x 0.060 x 0.050 m from `config/slung_payload.yaml` |
-| Cable lengths | [0.694, 0.692, 0.671] m in CF3/CF4/CF5 order |
-| Attachments | +x edge midpoint, -x/+y corner, -x/-y corner; all on the top face |
-| Payload inertia | Homogeneous-box inertia derived from the selected mass and dimensions |
-| Controller rate | 500 Hz, matching the MATLAB `dt = 0.002 s` baseline |
+| 无人机 | 3 架，顺序为 CF3、CF4、CF5 |
+| 无人机质量 | 0.0434、0.0463、0.0422 kg，来自 `config/ctbr_vehicle.yaml` |
+| 无人机指令推力上限 | 每架 1.00 N；标定总推力能力为 1.176798 N |
+| 机体角速度上限 | [3, 3, 2] rad/s；最大倾角 10 度 |
+| 无人机显示几何 | 机身 0.050 x 0.050 x 0.014 m，机臂 0.0465 m，旋翼半径 0.023 m，来自 MATLAB 参数 |
+| 桨叶保护罩 | 视觉代理外径 0.052 m、杆半径 0.001 m；按 0.046 m 桨径加间隙推算，并非厂家公布尺寸 |
+| 吊绳无人机端锚点 | 无人机质心；MATLAB 刚体动力学和配置绳长均以无人机质心位置建模 |
+| 载荷 | 0.054 kg，尺寸 0.080 x 0.060 x 0.050 m，来自 `config/slung_payload.yaml` |
+| 吊绳长度 | [0.694, 0.692, 0.631] m，顺序为 CF3、CF4、CF5（按当前工作树中的 `slung_payload.yaml`） |
+| 载荷连接点 | +x 棱边中点、-x/+y 角点、-x/-y 角点；均位于载荷顶面 |
+| 载荷转动惯量 | 根据选定质量和尺寸按均匀长方体公式计算 |
+| 载荷转动阻尼 | 0.001 N·m·s/rad，来自 MATLAB 动力学参数 |
+| 控制频率 | 500 Hz，与 MATLAB 的基准 `dt = 0.002 s` 一致 |
 
-Per-aircraft position, velocity, integral, independent-takeoff, transport-attitude, thrust, tilt, and rate settings are copied from the current `ctbr_vehicle.yaml` entries. Payload position gains, attitude bandwidth/damping, tension allocation, and cable-direction gains are copied from `slung_payload.yaml` and its MATLAB source. The current `transport_link_gain_scale: 0.0` is honored, so cable-direction feedback starts disabled as it does in the live configuration; changing that scale remains a config choice, not a new controller. Values absent from the live YAML, including vehicle inertias and visual geometry, use the CrazySwarm MATLAB parameter file. The MATLAB-only 0.0325 kg vehicle mass, 0.080 kg payload mass, and 0.65 m uniform cable length are not used as defaults.
+各架无人机的位置、速度、积分、独立起飞、运输姿态、推力、倾角和角速度参数，取自当前 `ctbr_vehicle.yaml` 中对应的配置项。载荷位置增益、姿态带宽/阻尼、张力分配和绳索方向增益，取自 `slung_payload.yaml` 及其 MATLAB 源码。绳方向反馈原始比例为 `0.0`；最新 CSV 的同条件悬停对照显示，将仿真 `transport_link_gain_scale` 从 `0.02` 降至 `0.01` 后，载荷横向 RMS 从 0.080 m 降至 0.073 m，三根绳方向误差 95 分位均略有下降；试验值 `0.05` 则出现退化。`link_kq` 和 `link_komega` 仍沿用 CrazySwarm 参数。该比例是仿真调参值，不代表 CrazySwarm 实机配置已更改。实机 YAML 未包含的数值（包括无人机转动惯量和显示几何）使用 CrazySwarm MATLAB 参数文件中的值。不使用 MATLAB 独有的 0.0325 kg 无人机质量、0.080 kg 载荷质量和统一 0.65 m 绳长作为默认值。
 
-The simulation uses Udaan/MuJoCo's world-z-up convention. MATLAB z-down quantities are converted once at the configuration boundary; controller internals and rendered geometry use z-up thereafter.
+仿真状态、模型几何和场景参数采用 Udaan/MuJoCo 的世界 z 轴向上坐标系。控制器入口将位置、速度、挂点和参考量反射到 MATLAB 的 z 轴向下坐标系计算，再把角速度指令转换回 MuJoCo 机体系；载荷和无人机的渲染几何保持 z 轴向上。Bitcraze 可查到的保护罩产品资料未给外形尺寸，因此保护罩环仅用于视觉展示、不参与碰撞和质量计算；外径按旋翼尺寸留隙估算，并记录在 CSV 中。
 
-## Control And Phase Flow
+## 控制器与阶段流程
 
-The model exposes collective thrust and body-rate commands with CrazySwarm's per-aircraft saturation. A bounded rate-response model follows the MATLAB Crazyflie inner-loop approximation; MuJoCo integrates rigid-body motion, contacts, and unilateral cable constraints. The tension-ramp phase blends independent and MATLAB-derived transport commands; cable tension itself comes from MuJoCo's unilateral cable constraints.
+模型提供总推力和机体角速度指令，并按 CrazySwarm 的每架无人机限幅。模型采用有界角速度响应来近似 MATLAB 中 Crazyflie 内环；MuJoCo 负责积分刚体运动、接触和单向吊绳约束。吊绳作用点放在无人机质心，以匹配 MATLAB 刚体方程并避免在控制器未建模的机身偏置处施力。张力渐增阶段将载荷参考和三架无人机位置冻结在交接时的实测值，使用五次平滑权重渐增协同指令，并保留无人机位置保持反馈；绳索张力由 MuJoCo 的单向绳索约束产生。
 
-1. `GROUND_SLACK`: the rectangular payload rests on the floor and the cables are slack.
-2. `INDEPENDENT_TAKEOFF`: each vehicle follows the CrazySwarm independent CTBR position controller to its 0.50 m staging height over 5.0 s.
-3. `TAKEUP`: the aircraft move to their cable-length geometry over 8.0 s; handoff requires cable-distance confirmation for 0.50 s and a further 0.30 s valid-state hold.
-4. `TENSION_RAMP`: blend from independent control into the MATLAB cooperative transport controller over 5.0 s.
-5. `REFERENCE_LIFT`: raise the load reference over 12.0 s to the configured 1.0 m hover height.
-6. `HOVER`: hold the load at the target for 30.0 s.
-7. `LANDING_TAUT`: lower the load while maintaining cooperative cable control for the configured 55% approach fraction; use the configured 4.0 s minimum descent duration and 0.25 m/s speed cap.
-8. `LANDING_RELEASE`: after load contact, release the cable constraint and independently lower the aircraft; finish in `LANDED` after ground contact and 0.30 s settle confirmation.
+1. `GROUND_SLACK`：长方体载荷放在地面上，吊绳保持松弛。
+2. `INDEPENDENT_TAKEOFF`：每架无人机使用 CrazySwarm 独立 CTBR 位置控制器，在 5.0 s 内到达 0.50 m 的集结高度。
+3. `TAKEUP`：无人机在 8.0 s 内移动到与各自绳长匹配的位置；绳长几何连续 0.50 s 得到确认，且状态继续有效保持 0.30 s 后，才允许交接。
+4. `TENSION_RAMP`：冻结交接时的载荷和无人机位置参考，在 5.0 s 内用五次平滑曲线建立张力；以 `ramp_position_hold_gain_scale=2.0` 保持无人机位置反馈，避免协同控制混入时三机向内收拢。
+5. `REFERENCE_LIFT`：在 12.0 s 内升高载荷参考位置，达到配置的 1.0 m 悬停高度。
+6. `HOVER`：将载荷保持在目标位置 30.0 s。
+7. `LANDING_TAUT`：保持协同吊绳控制并降低载荷，直至到达配置的着陆路径 55% 位置；下降至少持续 4.0 s，速度上限为 0.25 m/s。
+8. `LANDING_RELEASE`：载荷接触地面后释放绳索约束，无人机分别下降到起飞时选定的载荷外侧地面位置；确认无人机接触地面且稳定保持 0.30 s 后进入 `LANDED`。
 
-The timings and thresholds above come from current CrazySwarm `slung_payload.yaml` and `ctbr_controller.yaml`. Handoff also requires cable distance within 0.01 m and cable angle within 10 degrees. A payload state may be held for 0.20 s; a longer fault triggers CrazySwarm's bounded emergency landing after 0.30 s. Invalid or non-finite states never permit transport handoff.
+上述时间和阈值来自 CrazySwarm 当前的 `slung_payload.yaml` 和 `ctbr_controller.yaml`。控制交接还要求绳长误差不超过 0.01 m、绳索夹角不超过 10 度。载荷状态最多允许沿用 0.20 s；故障超过 0.30 s 后触发 CrazySwarm 有界紧急着陆。状态无效或包含非有限值时，不允许切换到运输控制。
 
-## Components
+## 组件
 
-- `udaan/models/mujoco/crazyswarm_slung.py` owns the three-vehicle rigid-payload MJCF, state extraction, simulation stepping, phase transitions, and a final run summary. MJCF is generated in memory from the configuration so per-vehicle cable lengths do not require a checked-in generated file.
-- `udaan/control/crazyswarm_slung.py` owns independent CTBR position control and the MATLAB cooperative payload, tension-allocation, cable-direction, and attitude control port.
-- `udaan/cli/run.py` exposes the command and existing recording/rendering options.
-- `tests/test_crazyswarm_slung.py` covers configuration, stage references/transitions, and a headless MuJoCo end-to-end run.
-- `README.md` and `docs/guides/running-simulations.md` document the command and parameter provenance.
+- `udaan/models/mujoco/crazyswarm_slung.py`：负责三机和刚性载荷的 MJCF、状态提取、仿真步进、阶段转换及最终运行摘要。MJCF 根据配置在内存中生成，因此不同无人机的绳长无需对应已提交的生成文件。
+- `udaan/control/crazyswarm_slung.py`：负责独立 CTBR 位置控制，以及 MATLAB 协同载荷、张力分配、绳索方向和姿态控制的移植。
+- `udaan/cli/run.py`：注册命令，接入录制和渲染选项，并默认输出带时间戳的 CSV 控制诊断日志。
+- `tests/test_crazyswarm_slung.py`：覆盖配置、阶段参考值和转换、CSV 字段与绳索张力，以及无窗口 MuJoCo 端到端运行。
+- `README.md` 和 `docs/guides/running-simulations.md`：记录命令及参数来源。
 
-## Verification
+## 验证
 
-- Unit tests verify the ordered hardware parameters, box inertia, z-axis conversion, and phase-reference boundary conditions.
-- State-machine tests verify that phases progress in order, handoff does not occur before cable geometry and confirmation conditions are satisfied, and landing finishes only after floor contact.
-- A headless MuJoCo integration run verifies finite states, bounded commands, cable lengths within their unilateral constraints during taut phases, payload lift to the hover target, and final ground contact for the payload and all vehicles.
-- Run the focused test module, the full Udaan test suite, and a rendered CLI smoke test with the default scenario.
+- 单元测试核对硬件参数顺序、长方体转动惯量、z 轴转换和阶段参考值边界。
+- 状态机测试验证阶段按顺序推进；只有满足绳索几何和确认条件时才交接；只有载荷接触地面后才完成着陆。
+- 无窗口 MuJoCo 集成运行检查状态值有限、控制指令有界、张紧阶段的绳长满足单向约束、载荷升至悬停目标，以及最终载荷和所有无人机均接触地面。
+- CSV 每个仿真步为三架无人机分别记录一行，包含 CrazySwarm 风格的状态、目标、误差和指令，并记录载荷状态、吊绳几何/张力及本次控制器增益。
+- 运行目标测试模块、完整 Udaan 测试套件，以及使用默认场景的 CLI 渲染冒烟测试。

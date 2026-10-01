@@ -55,19 +55,36 @@ class _GlfwViewer:
             return
 
         mujoco.mjv_moveCamera(
-            self._model, action, dx / width, dy / height, self._scene, self._camera
+            self._model, action, dx / width, dy / height, self._camera
         )
 
     def _scroll_callback(self, window, xoffset, yoffset):
         mujoco.mjv_moveCamera(
-            self._model, mujoco.mjtMouse.mjMOUSE_ZOOM, 0, -0.05 * yoffset, self._scene, self._camera
+            self._model, mujoco.mjtMouse.mjMOUSE_ZOOM, 0, -0.05 * yoffset, self._camera
         )
 
     def _key_callback(self, window, key, scancode, action, mods):
         import glfw
 
-        if action == glfw.PRESS and key in (glfw.KEY_ESCAPE, glfw.KEY_Q):
+        if action != glfw.PRESS:
+            return
+        if key in (glfw.KEY_ESCAPE, glfw.KEY_Q):
             glfw.set_window_should_close(window, True)
+        elif key == glfw.KEY_F:
+            self._camera.type = (
+                mujoco.mjtCamera.mjCAMERA_FREE
+                if self._camera.type == mujoco.mjtCamera.mjCAMERA_TRACKING
+                else mujoco.mjtCamera.mjCAMERA_TRACKING
+            )
+        else:
+            presets = {
+                glfw.KEY_1: (135.0, -20.0),
+                glfw.KEY_2: (90.0, -12.0),
+                glfw.KEY_3: (0.0, -12.0),
+                glfw.KEY_4: (90.0, -89.0),
+            }
+            if key in presets:
+                self._camera.azimuth, self._camera.elevation = presets[key]
 
     @property
     def cam(self):
@@ -285,10 +302,17 @@ class _GlfwViewer:
 
 
 class MujocoModel:
-    def __init__(self, model_path, render=False, record=None):
-        self.full_path = os.path.join(_FOLDER_PATH, "udaan", "models", "assets", "mjcf", model_path)
-        if not os.path.exists(self.full_path):
-            raise OSError(f"File {self.full_path} does not exist")
+    def __init__(self, model_path=None, render=False, record=None, model_xml=None):
+        self._model_xml = model_xml
+        self.full_path = None
+        if model_xml is None:
+            if model_path is None:
+                raise ValueError("model_path or model_xml must be provided")
+            self.full_path = os.path.join(
+                _FOLDER_PATH, "udaan", "models", "assets", "mjcf", model_path
+            )
+            if not os.path.exists(self.full_path):
+                raise OSError(f"File {self.full_path} does not exist")
 
         self.render = render
         self._record = record
@@ -298,8 +322,12 @@ class MujocoModel:
         self._initialize_simulation()
 
     def _initialize_simulation(self):
-        _logger.info("Loading model from %s", self.full_path)
-        self.model = mujoco.MjModel.from_xml_path(self.full_path)
+        if self._model_xml is None:
+            _logger.info("Loading model from %s", self.full_path)
+            self.model = mujoco.MjModel.from_xml_path(self.full_path)
+        else:
+            _logger.info("Loading generated MuJoCo model from XML string")
+            self.model = mujoco.MjModel.from_xml_string(self._model_xml)
         self.data = mujoco.MjData(self.model)
         self._wall_start = None
 
@@ -368,6 +396,11 @@ class MujocoModel:
 
 
 from ..quadrotor.mujoco import QuadrotorMujoco as Quadrotor
+from .crazyswarm_slung import (
+    CrazySwarmSlungModel as CrazySwarmSlungModel,
+    CrazySwarmSlungPhase as CrazySwarmSlungPhase,
+    default_config as crazyswarm_slung_default_config,
+)
 from .multi_quad_cs_pointmass import MultiQuadrotorCSPointmass as MultiQuadrotorCSPointmass
 from .multi_quad_rigidbody import MultiQuadRigidbody as MultiQuadRigidbody
 from .quadrotor_comparison import QuadrotorComparison as QuadrotorComparison
@@ -376,10 +409,13 @@ from .quadrotor_fleet import QuadrotorFleet as QuadrotorFleet
 
 __all__ = [
     "MujocoModel",
+    "CrazySwarmSlungModel",
+    "CrazySwarmSlungPhase",
     "MultiQuadrotorCSPointmass",
     "MultiQuadRigidbody",
     "Quadrotor",
     "QuadrotorComparison",
     "QuadrotorCsPayloadFleet",
     "QuadrotorFleet",
+    "crazyswarm_slung_default_config",
 ]
