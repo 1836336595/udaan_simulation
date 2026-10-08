@@ -69,7 +69,7 @@ class CrazySwarmSlungConfig:
     link_integral_limit: tuple[float, float, float] = (0.30, 0.30, 0.30)
     outward_bias_fraction: float = 0.20
     outward_bias_max_n: float = 0.12
-    transport_link_gain_scale: float = 0.01
+    transport_link_gain_scale: float = 1.00
     ground_slack_duration: float = 0.50
     independent_hover_height: float = 0.50
     independent_takeoff_duration: float = 5.0
@@ -127,8 +127,8 @@ def default_config():
         "independent_integral_gate": 0.20,
         "independent_max_feedback_acceleration": (6.0, 6.0, 8.0),
         "independent_attitude_gain": (12.0, 12.0, 6.0),
-        "transport_attitude_gain": (6.0, 6.0, 3.0),
-        "transport_rate_gain": (2.0, 2.0, 2.0),
+        "transport_attitude_gain": (240, 240, 120),
+        "transport_rate_gain": (35.0, 35.0, 20.0),
     }
     vehicles = (
         CrazyflieParameters(
