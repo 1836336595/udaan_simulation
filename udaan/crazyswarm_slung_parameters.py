@@ -58,7 +58,7 @@ class CrazySwarmSlungConfig:
     payload_integral_gain: tuple[float, float, float] = (1.60, 1.60, 1.60)
     payload_integral_limit: tuple[float, float, float] = (0.50, 0.50, 0.50)
     payload_integral_c1: float = 0.50
-    payload_attitude_bandwidth_hz: tuple[float, float, float] = (6.0, 6.0, 0.30)
+    payload_attitude_bandwidth_hz: tuple[float, float, float] = (2.0, 2.0, 0.45)
     payload_attitude_damping: float = 0.90
     payload_yaw_enabled: bool = True
     payload_rotational_damping: float = 1.0e-3
@@ -67,8 +67,8 @@ class CrazySwarmSlungConfig:
     link_komega: float = 20.0
     link_integral_gain: float = 0.0
     link_integral_limit: tuple[float, float, float] = (0.30, 0.30, 0.30)
-    outward_bias_fraction: float = 0.20
-    outward_bias_max_n: float = 0.12
+    outward_bias_fraction: float = 0.25
+    outward_bias_max_n: float = 0.15
     transport_link_gain_scale: float = 1.00
     ground_slack_duration: float = 0.50
     independent_hover_height: float = 0.50
@@ -90,6 +90,20 @@ class CrazySwarmSlungConfig:
     landing_settle_duration: float = 0.30
     landing_velocity_tolerance: float = 0.03
     payload_state_hold_duration: float = 0.20
+    payload_state_estimator: str = "second_order_low_pass" # observer / second_order_low_pass / mujoco_truth
+    payload_pose_sample_rate_hz: float = 100.0
+    payload_velocity_filter_cutoff_hz: float = 3.0
+    payload_observer_position_gain: float = 0.35
+    # At 100 Hz, these gains reduce velocity/body-rate phase lag during lift.
+    payload_observer_velocity_gain: float = 0.20
+    payload_observer_acceleration_gain: float = 0.02
+    payload_observer_attitude_gain: float = 0.35
+    payload_observer_angular_rate_gain: float = 0.30
+    payload_observer_max_dt: float = 0.05
+    payload_observer_max_velocity_mps: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    payload_observer_max_acceleration_mps2: tuple[float, float, float] = (8.0, 8.0, 8.0)
+    payload_observer_max_body_rate_rps: tuple[float, float, float] = (8.0, 8.0, 8.0)
+    payload_observer_min_samples: int = 3
     emergency_land_after: float = 0.30
     ground_contact_tolerance: float = 0.003
 

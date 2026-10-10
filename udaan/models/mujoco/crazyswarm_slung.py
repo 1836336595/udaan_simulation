@@ -18,6 +18,8 @@ from ...control.crazyswarm_slung import (
     z_down_to_up,
     z_up_to_down,
 )
+from ...control.payload_state_observer import PayloadStateObserver
+from ...control.payload_state_filter import PayloadPoseLowPassFilter
 from .crazyswarm_slung_logging import (
     CrazySwarmSlungCsvLogger,
     rotation_euler_xyz as _rotation_euler_xyz,
@@ -70,6 +72,39 @@ class CrazySwarmSlungModel:
         self.config = default_config() if config is None else config
         self.render = bool(render)
         self.controller = CrazySwarmSlungController(self.config)
+        if self.config.payload_state_estimator not in (
+            "observer", "second_order_low_pass", "mujoco_truth"
+        ):
+            raise ValueError(
+                "payload_state_estimator must be 'observer', 'second_order_low_pass', "
+                "or 'mujoco_truth'"
+            )
+        self.payload_state_observer = PayloadStateObserver(
+            position_gain=self.config.payload_observer_position_gain,
+            velocity_gain=self.config.payload_observer_velocity_gain,
+            acceleration_gain=self.config.payload_observer_acceleration_gain,
+            attitude_gain=self.config.payload_observer_attitude_gain,
+            angular_rate_gain=self.config.payload_observer_angular_rate_gain,
+            max_dt=self.config.payload_observer_max_dt,
+            max_velocity_mps=self.config.payload_observer_max_velocity_mps,
+            max_acceleration_mps2=self.config.payload_observer_max_acceleration_mps2,
+            max_body_rate_rps=self.config.payload_observer_max_body_rate_rps,
+            min_samples=self.config.payload_observer_min_samples,
+        )
+        self.payload_pose_filter = PayloadPoseLowPassFilter(
+            cutoff_hz=self.config.payload_velocity_filter_cutoff_hz,
+            max_dt=self.config.payload_observer_max_dt,
+            min_samples=self.config.payload_observer_min_samples,
+        )
+        pose_sample_rate = float(self.config.payload_pose_sample_rate_hz)
+        if not np.isfinite(pose_sample_rate) or pose_sample_rate <= 0.0:
+            raise ValueError("payload_pose_sample_rate_hz must be positive")
+        self._payload_pose_sample_period = 1.0 / pose_sample_rate
+        if self._payload_pose_sample_period > self.config.payload_observer_max_dt:
+            raise ValueError("payload pose sample period must not exceed observer max_dt")
+        self._last_payload_pose_sample_time = None
+        self._payload_controller_state = None
+        self._payload_truth_sample_count = 0
         self._mjMdl = MujocoModel(
             model_path=None,
             model_xml=build_mjcf(self.config),
@@ -199,6 +234,11 @@ class CrazySwarmSlungModel:
         self._hover_target_payload = self._load_initial_position.copy()
         self._landing_duration = self.config.landing_minimum_duration
         self._landing_release_earliest = 0.0
+        self.payload_state_observer.reset()
+        self.payload_pose_filter.reset()
+        self._last_payload_pose_sample_time = None
+        self._payload_truth_sample_count = 0
+        self._update_payload_controller_state(force=True)
         return self
 
     def close(self):
@@ -235,6 +275,57 @@ class CrazySwarmSlungModel:
 
     def payload_state(self):
         return self._body_state(self._load_body_id, self._load_dof)
+
+    def _update_payload_controller_state(self, force=False):
+        """Sample payload pose at the mocap rate and estimate its derivatives."""
+        timestamp = float(self.data.time)
+        estimator_mode = self.config.payload_state_estimator
+        if (
+            force
+            or estimator_mode == "mujoco_truth"
+            or self._last_payload_pose_sample_time is None
+            or timestamp - self._last_payload_pose_sample_time
+            >= self._payload_pose_sample_period - 1.0e-12
+        ):
+            measured = self.payload_state()
+            if estimator_mode == "mujoco_truth":
+                self._payload_truth_sample_count += 1
+                observed = {
+                    "position": measured["position"],
+                    "velocity": measured["velocity"],
+                    "acceleration": measured["acceleration"],
+                    "body_rate": measured["body_rate"],
+                    "derivatives_valid": True,
+                    "sample_count": self._payload_truth_sample_count,
+                }
+            elif estimator_mode == "second_order_low_pass":
+                observed = self.payload_pose_filter.update(
+                    measured["position"], measured["rotation"], timestamp
+                )
+                if observed is None:
+                    raise RuntimeError("payload low-pass filter rejected the MuJoCo sample")
+            else:
+                observed = self.payload_state_observer.update(
+                    measured["position"], measured["rotation"], timestamp
+                )
+                if observed is None:
+                    raise RuntimeError("payload state observer rejected the MuJoCo sample")
+            self._payload_controller_state = {
+                "valid": True,
+                "position": observed.get("position", measured["position"]).copy(),
+                "rotation": measured["rotation"].copy(),
+                "velocity": observed["velocity"],
+                "acceleration": observed["acceleration"],
+                "body_rate": observed["body_rate"],
+                "derivatives_valid": observed["derivatives_valid"],
+                "sample_count": observed["sample_count"],
+                "sample_time": timestamp,
+            }
+            self._last_payload_pose_sample_time = timestamp
+        return {
+            key: value.copy() if isinstance(value, np.ndarray) else value
+            for key, value in self._payload_controller_state.items()
+        }
 
     def vehicle_states(self):
         return [
@@ -419,11 +510,13 @@ class CrazySwarmSlungModel:
         payload_target,
         cooperative,
         cooperative_blend,
+        payload_controller_state,
     ):
         if self._csv_logger is None:
             return
 
         payload = self.payload_state()
+        payload_observed = payload_controller_state
         vehicles = self.vehicle_states()
         cable_lengths = self.data.ten_length[self._tendon_ids]
         cable_velocities = self.data.ten_velocity[self._tendon_ids]
@@ -454,6 +547,12 @@ class CrazySwarmSlungModel:
         )
         payload_position_error = payload["position"] - payload_target_position
         payload_velocity_error = payload["velocity"] - payload_target_velocity
+        payload_observed_position_error = (
+            payload_observed["position"] - payload_target_position
+        )
+        payload_observed_velocity_error = (
+            payload_observed["velocity"] - payload_target_velocity
+        )
         if cooperative is None:
             payload_attitude_error = np.full(3, np.nan)
             payload_desired_force = np.full(3, np.nan)
@@ -488,6 +587,29 @@ class CrazySwarmSlungModel:
                 "payload_roll_rad": _rotation_euler_xyz(payload["rotation"])[0],
                 "payload_pitch_rad": _rotation_euler_xyz(payload["rotation"])[1],
                 "payload_yaw_rad": _rotation_euler_xyz(payload["rotation"])[2],
+                "payload_observed_roll_rad": _rotation_euler_xyz(
+                    payload_observed["rotation"]
+                )[0],
+                "payload_observed_pitch_rad": _rotation_euler_xyz(
+                    payload_observed["rotation"]
+                )[1],
+                "payload_observed_yaw_rad": _rotation_euler_xyz(
+                    payload_observed["rotation"]
+                )[2],
+                "payload_observation_derivatives_valid": int(
+                    payload_observed["derivatives_valid"]
+                ),
+                "payload_observation_sample_count": payload_observed["sample_count"],
+                "payload_observation_sample_time_s": payload_observed["sample_time"],
+                "payload_pose_sample_rate_hz": config.payload_pose_sample_rate_hz,
+                "payload_state_estimator": config.payload_state_estimator,
+                "payload_velocity_filter_cutoff_hz": config.payload_velocity_filter_cutoff_hz,
+                "payload_observer_position_gain": config.payload_observer_position_gain,
+                "payload_observer_velocity_gain": config.payload_observer_velocity_gain,
+                "payload_observer_acceleration_gain": config.payload_observer_acceleration_gain,
+                "payload_observer_attitude_gain": config.payload_observer_attitude_gain,
+                "payload_observer_angular_rate_gain": config.payload_observer_angular_rate_gain,
+                "payload_observer_max_dt_s": config.payload_observer_max_dt,
                 "vehicle_mass_kg": params.mass,
                 "vehicle_max_total_thrust_n": params.max_total_thrust,
                 "vehicle_max_command_thrust_n": params.max_command_thrust,
@@ -529,11 +651,23 @@ class CrazySwarmSlungModel:
             add_vector("payload_velocity", payload["velocity"])
             add_vector("payload_acceleration", payload["acceleration"])
             add_vector("payload_body_rate", payload["body_rate"])
+            add_vector("payload_observed_position", payload_observed["position"])
+            add_vector("payload_observed_velocity", payload_observed["velocity"])
+            add_vector("payload_observed_acceleration", payload_observed["acceleration"])
+            add_vector("payload_observed_body_rate", payload_observed["body_rate"])
+            add_vector("payload_observer_max_velocity", config.payload_observer_max_velocity_mps)
+            add_vector(
+                "payload_observer_max_acceleration",
+                config.payload_observer_max_acceleration_mps2,
+            )
+            add_vector("payload_observer_max_body_rate", config.payload_observer_max_body_rate_rps)
             add_vector("payload_target", payload_target_position)
             add_vector("payload_target_velocity", payload_target_velocity)
             add_vector("payload_target_acceleration", payload_target_acceleration)
             add_vector("payload_position_error", payload_position_error)
             add_vector("payload_velocity_error", payload_velocity_error)
+            add_vector("payload_observed_position_error", payload_observed_position_error)
+            add_vector("payload_observed_velocity_error", payload_observed_velocity_error)
             add_vector("payload_attitude_error", payload_attitude_error)
             add_vector("payload_desired_force", payload_desired_force)
             add_vector("payload_desired_moment", payload_desired_moment)
@@ -650,6 +784,7 @@ class CrazySwarmSlungModel:
         vehicle_target_velocities = None
         cooperative = None
         cooperative_blend = float("nan")
+        payload_controller_state = self._update_payload_controller_state()
         payload_target = {
             "position": self._load_initial_position.copy(),
             "velocity": np.zeros(3),
@@ -681,7 +816,7 @@ class CrazySwarmSlungModel:
             payload_target = self._payload_reference()
             vehicle_states = self.vehicle_states()
             cooperative = self.controller.cooperative_commands(
-                self.payload_state(),
+                payload_controller_state,
                 vehicle_states,
                 payload_target,
                 dt,
@@ -725,6 +860,7 @@ class CrazySwarmSlungModel:
             payload_target,
             cooperative,
             cooperative_blend,
+            payload_controller_state,
         )
         self._mjMdl._step_mujoco_simulation(1)
         self.t = float(self.data.time)

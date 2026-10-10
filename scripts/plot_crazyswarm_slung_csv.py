@@ -44,6 +44,30 @@ LOAD_FIELDS = (
     "payload_pitch_rad",
     "payload_yaw_rad",
 )
+OBSERVED_LOAD_FIELDS = (
+    "payload_observed_position_x",
+    "payload_observed_position_y",
+    "payload_observed_position_z",
+    "payload_observed_velocity_x",
+    "payload_observed_velocity_y",
+    "payload_observed_velocity_z",
+    "payload_observed_acceleration_x",
+    "payload_observed_acceleration_y",
+    "payload_observed_acceleration_z",
+    "payload_observed_body_rate_x",
+    "payload_observed_body_rate_y",
+    "payload_observed_body_rate_z",
+    "payload_observed_roll_rad",
+    "payload_observed_pitch_rad",
+    "payload_observed_yaw_rad",
+    "payload_observation_derivatives_valid",
+    "payload_observed_position_error_x",
+    "payload_observed_position_error_y",
+    "payload_observed_position_error_z",
+    "payload_observed_velocity_error_x",
+    "payload_observed_velocity_error_y",
+    "payload_observed_velocity_error_z",
+)
 VEHICLE_FIELDS = (
     "position_x",
     "position_y",
@@ -85,6 +109,7 @@ def load_csv(path, phase=None, max_points=30000):
     """Load one payload sample per tick and separate per-vehicle cable data."""
     path = Path(path).expanduser()
     payload = {name: [] for name in LOAD_FIELDS}
+    payload.update({name: [] for name in OBSERVED_LOAD_FIELDS})
     payload["time"] = []
     payload["phase"] = []
     vehicle_data = {
@@ -113,6 +138,8 @@ def load_csv(path, phase=None, max_points=30000):
                 payload["phase"].append(stage)
                 for field in LOAD_FIELDS:
                     payload[field].append(_float(row, field))
+                for field in OBSERVED_LOAD_FIELDS:
+                    payload[field].append(_float(row, field))
             vehicle_data[vehicle]["time"].append(time_s)
             for field in VEHICLE_FIELDS:
                 vehicle_data[vehicle][field].append(_float(row, field))
@@ -128,7 +155,12 @@ def load_csv(path, phase=None, max_points=30000):
     payload["phase"] = np.asarray(payload["phase"], dtype=str)
     for field in LOAD_FIELDS:
         payload[field] = np.asarray(payload[field], dtype=float)
+    for field in OBSERVED_LOAD_FIELDS:
+        payload[field] = np.asarray(payload[field], dtype=float)
     payload["payload_yaw_deg"] = np.rad2deg(np.unwrap(payload["payload_yaw_rad"]))
+    payload["payload_observed_yaw_deg"] = np.rad2deg(
+        np.unwrap(payload["payload_observed_yaw_rad"])
+    )
 
     for vehicle, values in vehicle_data.items():
         values["time"] = np.asarray(values["time"], dtype=float)
@@ -227,7 +259,18 @@ def create_figure(data):
     target_load = np.column_stack([
         payload[f"payload_target_{axis}"] for axis in "xyz"
     ])
+    observed_load = np.column_stack([
+        payload[f"payload_observed_position_{axis}"] for axis in "xyz"
+    ])
     trajectory.plot(*actual_load.T, color="#0072B2", linewidth=1.8, label="Load")
+    if np.any(np.isfinite(observed_load)):
+        trajectory.plot(
+            *observed_load.T,
+            color="#009E73",
+            linewidth=1.2,
+            linestyle=":",
+            label="Load pose observed by controller",
+        )
     trajectory.plot(
         *target_load.T,
         color="#D55E00",
@@ -255,7 +298,7 @@ def create_figure(data):
     trajectory.scatter(*actual_load[-1], color="#0072B2", s=30, marker="x")
     trajectory.set(xlabel="X (m)", ylabel="Y (m)", zlabel="Height (m)", title="3D trajectories")
     trajectory.legend(loc="upper left", fontsize=8)
-    all_points = [actual_load, target_load]
+    all_points = [actual_load, observed_load, target_load]
     all_points.extend(
         np.column_stack([values[f"position_{axis}"] for axis in "xyz"])
         for values in vehicles.values()
@@ -272,19 +315,35 @@ def create_figure(data):
         trajectory.set_box_aspect((1, 1, 1))
 
     for axis in "xyz":
+        observed_error = payload[f"payload_observed_position_error_{axis}"]
+        if not np.any(np.isfinite(observed_error)):
+            observed_error = payload[f"payload_position_error_{axis}"]
         position_error.plot(
             time_s,
-            payload[f"payload_position_error_{axis}"],
+            observed_error,
             color=axis_colors[axis],
             linewidth=1.0,
             label=f"e{axis}",
         )
-    position_error.set(xlabel="Time (s)", ylabel="Error (m)", title="Load position error")
+    position_error.set(
+        xlabel="Time (s)",
+        ylabel="Error (m)",
+        title="Load position error (controller observation)",
+    )
     position_error.legend(loc="upper right", ncol=3, fontsize=8)
     position_error.grid(True, alpha=0.25)
 
     for axis, label in (("roll", "Roll"), ("pitch", "Pitch"), ("yaw", "Yaw")):
-        values = payload["payload_yaw_deg"] if axis == "yaw" else np.rad2deg(payload[f"payload_{axis}_rad"])
+        observed = payload[f"payload_observed_{axis}_rad"]
+        values = np.rad2deg(observed)
+        if axis == "yaw":
+            values = payload["payload_observed_yaw_deg"]
+        if not np.any(np.isfinite(values)):
+            values = (
+                payload["payload_yaw_deg"]
+                if axis == "yaw"
+                else np.rad2deg(payload[f"payload_{axis}_rad"])
+            )
         attitude.plot(time_s, values, linewidth=1.0, label=label)
     attitude.axhline(0.0, color="#555555", linewidth=0.7, linestyle=":")
     attitude.set(xlabel="Time (s)", ylabel="Angle (deg)", title="Load attitude (yaw unwrapped)")
@@ -318,7 +377,16 @@ def create_figure(data):
     tension.legend(loc="upper right", ncol=2, fontsize=7)
     tension.grid(True, alpha=0.25)
 
-    height.plot(time_s, payload["payload_position_z"], color="#0072B2", linewidth=1.4, label="Load")
+    height.plot(time_s, payload["payload_position_z"], color="#0072B2", linewidth=1.4, label="Load truth")
+    if np.any(np.isfinite(payload["payload_observed_position_z"])):
+        height.plot(
+            time_s,
+            payload["payload_observed_position_z"],
+            color="#009E73",
+            linewidth=1.0,
+            linestyle=":",
+            label="Observed load pose",
+        )
     height.plot(time_s, payload["payload_target_z"], color="#D55E00", linestyle="--", label="Load reference")
     height.axhline(0.0, color="#555555", linewidth=0.7, linestyle=":", label="Ground")
     height.set(xlabel="Time (s)", ylabel="Height (m)", title="Height")

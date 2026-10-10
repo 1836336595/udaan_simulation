@@ -1,6 +1,7 @@
 """Tests for the CrazySwarm three-vehicle slung-load scenario."""
 
 import csv
+from dataclasses import replace
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +16,8 @@ from udaan.control.crazyswarm_slung import (
     z_down_to_up,
     z_up_to_down,
 )
+from udaan.control.payload_state_observer import PayloadStateObserver
+from udaan.control.payload_state_filter import PayloadPoseLowPassFilter
 from udaan.models.mujoco.crazyswarm_slung import (
     CrazySwarmSlungModel,
     CrazySwarmSlungPhase,
@@ -24,6 +27,101 @@ from udaan.models.mujoco.crazyswarm_slung import (
 
 
 class CrazySwarmSlungTests(unittest.TestCase):
+    def test_second_order_pose_filter_estimates_translation_and_rotation_rates(self):
+        estimator = PayloadPoseLowPassFilter(cutoff_hz=3.0)
+        observed = None
+        for sample in range(201):
+            timestamp = sample / 100.0
+            position = np.array([0.2 * timestamp, -0.1 * timestamp, 0.0])
+            yaw = 0.3 * timestamp
+            rotation = np.array([
+                [np.cos(yaw), -np.sin(yaw), 0.0],
+                [np.sin(yaw), np.cos(yaw), 0.0],
+                [0.0, 0.0, 1.0],
+            ])
+            observed = estimator.update(position, rotation, timestamp)
+
+        self.assertTrue(observed["derivatives_valid"])
+        self.assertGreater(np.linalg.norm(observed["position"] - position), 1e-3)
+        np.testing.assert_allclose(observed["position"], position, atol=0.02)
+        np.testing.assert_allclose(observed["velocity"], [0.2, -0.1, 0.0], atol=1e-6)
+        np.testing.assert_allclose(observed["body_rate"], [0.0, 0.0, 0.3], atol=1e-5)
+        np.testing.assert_allclose(observed["acceleration"], 0.0, atol=1e-5)
+
+    def test_payload_estimator_mode_is_configurable(self):
+        default = default_config()
+        self.assertEqual(default.payload_state_estimator, "observer")
+        self.assertEqual(default.payload_velocity_filter_cutoff_hz, 3.0)
+        observer_config = replace(default, payload_state_estimator="observer")
+        model = CrazySwarmSlungModel(render=False, config=observer_config)
+        try:
+            self.assertEqual(model.config.payload_state_estimator, "observer")
+        finally:
+            model.close()
+
+    def test_mujoco_truth_mode_uses_full_payload_state_at_each_step(self):
+        config = replace(default_config(), payload_state_estimator="mujoco_truth")
+        model = CrazySwarmSlungModel(render=False, config=config)
+        try:
+            expected_velocity = np.array([0.2, -0.1, 0.3])
+            expected_acceleration = np.array([1.0, 2.0, -3.0])
+            expected_body_rate = np.array([0.4, -0.5, 0.6])
+            model.data.qvel[model._load_dof : model._load_dof + 6] = [
+                *expected_velocity, *expected_body_rate
+            ]
+            model.data.qacc[model._load_dof : model._load_dof + 6] = [
+                *expected_acceleration, 0.0, 0.0, 0.0
+            ]
+            model.data.time = 0.001
+            state = model._update_payload_controller_state()
+
+            np.testing.assert_allclose(state["velocity"], expected_velocity)
+            np.testing.assert_allclose(state["acceleration"], expected_acceleration)
+            np.testing.assert_allclose(state["body_rate"], expected_body_rate)
+            self.assertTrue(state["derivatives_valid"])
+        finally:
+            model.close()
+
+    def test_payload_observer_estimates_derivatives_from_pose_samples(self):
+        observer = PayloadStateObserver()
+        observed = None
+        for sample in range(101):
+            timestamp = sample / 100.0
+            position = np.array([0.2 * timestamp, 0.0, 0.0])
+            yaw = 0.3 * timestamp
+            rotation = np.array([
+                [np.cos(yaw), -np.sin(yaw), 0.0],
+                [np.sin(yaw), np.cos(yaw), 0.0],
+                [0.0, 0.0, 1.0],
+            ])
+            observed = observer.update(position, rotation, timestamp)
+
+        self.assertTrue(observed["derivatives_valid"])
+        self.assertGreater(observed["velocity"][0], 0.1)
+        self.assertGreater(observed["body_rate"][2], 0.1)
+        self.assertTrue(np.all(np.isfinite(observed["acceleration"])))
+
+    def test_payload_control_state_does_not_read_mujoco_derivatives(self):
+        model = CrazySwarmSlungModel(render=False)
+        try:
+            model.data.qvel[model._load_dof : model._load_dof + 6] = [
+                0.8, -0.4, 0.3, 0.2, -0.1, 0.9
+            ]
+            model.data.qacc[model._load_dof : model._load_dof + 6] = [
+                2.0, -2.0, 3.0, 1.0, 1.0, -1.0
+            ]
+            model.data.time = model._payload_pose_sample_period
+            state = model._update_payload_controller_state()
+
+            np.testing.assert_allclose(state["position"], model.payload_state()["position"])
+            np.testing.assert_allclose(state["rotation"], model.payload_state()["rotation"])
+            np.testing.assert_allclose(state["velocity"], 0.0)
+            np.testing.assert_allclose(state["acceleration"], 0.0)
+            np.testing.assert_allclose(state["body_rate"], 0.0)
+            self.assertNotEqual(state["velocity"][0], model.payload_state()["velocity"][0])
+        finally:
+            model.close()
+
     def test_viewer_mouse_callbacks_use_supported_camera_api(self):
         viewer = _GlfwViewer.__new__(_GlfwViewer)
         viewer._model = mujoco.MjModel.from_xml_string(
@@ -66,7 +164,7 @@ class CrazySwarmSlungTests(unittest.TestCase):
         )
 
     def test_link_direction_feedback_uses_simulation_tuning_value(self):
-        self.assertAlmostEqual(default_config().transport_link_gain_scale, 0.01)
+        self.assertAlmostEqual(default_config().transport_link_gain_scale, 1.0)
 
     def test_z_down_conversion_is_an_involution(self):
         vector = np.array([0.3, -0.2, 1.7])
@@ -181,6 +279,12 @@ class CrazySwarmSlungTests(unittest.TestCase):
             {row["vehicle_id"] for row in rows}, {"CF3", "CF4", "CF5"}
         )
         self.assertIn("cable_tension_n", rows[0])
+        self.assertIn("payload_observed_velocity_x", rows[0])
+        self.assertIn("payload_observation_derivatives_valid", rows[0])
+        self.assertEqual(rows[0]["payload_state_estimator"], "observer")
+        self.assertAlmostEqual(
+            float(rows[0]["payload_velocity_filter_cutoff_hz"]), 3.0
+        )
         self.assertIn("desired_tension_n", rows[0])
         self.assertIn("payload_kp_z", rows[0])
         self.assertAlmostEqual(float(rows[0]["prop_guard_outer_diameter_m"]), 0.052)
